@@ -1,0 +1,313 @@
+---
+title: "Quarterback Heatmaps"
+author: "Andrew vanderWilden"
+date: "10/2/2020"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+```{r}
+library(tidyverse)
+library(ggtext)
+library(ggExtra)
+library(patchwork)
+library(paletteer)
+library(scales)
+library(gt)
+```
+
+```{r}
+df <- read_csv('heatmapdata.csv')
+```
+
+
+# Plot of all the points
+
+```{r}
+df %>%
+  ggplot(aes(x_coord,y_coord)) +
+  geom_point()
+
+```
+
+
+This plot is over plotted, impossible to see any differences between 10 ~ 20 yard DOT.
+
+### Add Transparency to try to visualize most common throws
+
+```{r}
+red_beard <- df %>%
+  ggplot(aes(x_coord,y_coord)) +
+  geom_point(alpha = 0.1, color = 'red') +
+  labs(title = 'Alpha = 0.1 or 90% Transparency')
+
+red_beard_ratio <- df %>%
+  ggplot(aes(x_coord,y_coord)) +
+  geom_point(alpha = 1/20, color = 'red') +
+  labs(title = 'Alpha = 1/20 so 20 points must be stacked')
+
+red_beard + red_beard_ratio
+```
+
+### Add Marginal Plots to further help visualize
+
+```{r}
+ggMarginal(red_beard, type = 'density', fill = 'red')
+```
+
+```{r}
+ggMarginal(red_beard, type = 'histogram', fill = 'red')
+```
+
+
+
+# 2D Density Alternatives
+
+Since we are actually interested in the density of passes at each coordinate, it makes sense to bin each coordinate and use a hex plot or bin2d
+
+```{r}
+hex_plot <- df %>%
+  ggplot(aes(x_coord, y_coord)) +
+  geom_hex(binwidth = c(1,1)) +
+  scale_fill_gradient(low = 'red', high = 'yellow') +
+  scale_y_continuous(breaks = seq(-10,60,5))
+
+hex_plot
+```
+
+
+```{r}
+bin2d <- df %>%
+  ggplot(aes(x_coord, y_coord)) +
+  geom_bin2d(binwidth = c(1,1)) +
+  scale_fill_gradient(low = 'red', high = 'yellow') +
+  scale_y_continuous(breaks = seq(-10,60,5))
+
+bin2d
+```
+
+
+We can see the majority of passes are thrown between 2-7 yards.
+
+## Examining Most Common DOTs
+
+### Histogram of just Y DOT
+```{r}
+df %>%
+  ggplot(aes(y_coord)) +
+  geom_histogram(binwidth = 1) +
+  scale_x_continuous(breaks = seq(-10,60,5))
+```
+
+
+### Table of most common DOT
+
+```{r, echo = TRUE, include=FALSE}
+pass_by_y <- df %>%
+  mutate(DOT = round(y_coord, digits = 0)) %>%
+  count(DOT) %>%
+  mutate(
+    total = sum(n),
+    pct_total = n/total,
+    roll_total = cumsum(pct_total)
+  ) %>%
+  arrange(desc(pct_total)) %>%
+  head(10) %>%
+  gt() %>%
+  fmt_percent(columns = c(4,5), decimals = 1)
+
+pass_by_y
+```
+
+
+
+# Plotting only Mahomes
+
+```{r}
+mahomes <- df %>%
+  filter(str_detect(name, c('Mahomes')))
+```
+
+### With fewer observations, harder to determine overall trend:
+
+```{r}
+mahomes %>%
+  ggplot(aes(x_coord, y_coord)) +
+  geom_hex(binwidth = c(1,1)) +
+  scale_y_continuous(breaks = seq(-10,60,5))
+```
+
+
+
+### Solution: 2D Density Plot
+
+```{r}
+mahomes %>%
+  ggplot(aes(x_coord,y_coord)) +
+  geom_density_2d_filled() +
+  scale_y_continuous(breaks = seq(-10,60,5))
+```
+
+
+We can use this to compare 2 different QBs. Normalize by number of throws, drop least frequent areas.
+
+### Mahomes vs. Brady
+
+```{r}
+df %>%
+  filter(str_detect(name, c('Mahomes|Brady'))) %>%
+  ggplot(aes(x_coord,y_coord)) +
+  geom_density_2d_filled(
+    aes(fill = ..level..),
+    contour_var = 'ndensity', # normalize
+    breaks = seq(0.1,1, length.out = 10) # drop least frequent
+  ) +
+  scale_y_continuous(breaks = seq(10,60,5)) +
+  facet_wrap(~name)
+```
+
+
+# Build a Football Field
+
+```{r}
+not_div_5 <- function(x) {
+  x[x %% 5 != 0]
+}
+
+center_df <- tibble(
+  x_coord = c(rep(-3.1, 60), rep(3.1, 60)),
+  y_coord = seq(-14, 59, 1) %>% rep(2) %>% not_div_5(),
+  text = "--"
+)
+
+# line labels
+annotate_df <- tibble(
+  x_coord = c(12.88, -12.88) %>% rep(each = 5),
+  y_coord = seq(10, 50, 10) %>% rep(2),
+  text = seq(10, 50, 10) %>% rep(2) %>% str_replace("(.)(.)", "\\1 \\2"),
+  rotation = c(90, 270) %>% rep(each = 5)
+)
+
+# yardlines
+yardline_df <- tibble(
+  y = seq(-15, 60, 5),
+  yend = seq(-15, 60, 5),
+  x = rep(-56 / 2, 16),
+  xend = rep(56 / 2, 16)
+)
+
+# sidelines
+sideline_df <- tibble(
+  y = c(-15.15, -15.15),
+  yend = c(60.15, 60.15),
+  x = c(-56 / 2, 56 / 2),
+  xend = c(-56 / 2, 56 / 2)
+)
+
+
+
+add_field <- function() {
+  list(
+    coord_cartesian(
+      xlim = c(-53.333 / 2, 53.333 / 2),
+      ylim = c(-15, 60)
+    ),
+    geom_text(
+      data = annotate_df, aes(label = text, angle = rotation),
+      color = front_col, size = 8
+    ),
+    geom_segment(
+      data = yardline_df, color = front_col, size = 1,
+      aes(x = x, y = y, xend = xend, yend = yend)
+    ),
+    geom_segment(
+      x = -56 / 2, y = 0, xend = 56 / 2, yend = 0,
+      color = "blue", size = 1, alpha = 0.5
+    ),
+    geom_segment(
+      data = sideline_df, color = front_col, size = 2,
+      aes(x = x, y = y, xend = xend, yend = yend)
+    ),
+    geom_text(
+      data = center_df,
+      aes(label = text), color = front_col, vjust = 0.32
+    ),
+    theme_void(),
+    theme(
+      strip.text = element_text(size = 20, color = front_col),
+      plot.background = element_rect(fill = back_col, color = NA),
+      legend.position = "none",
+      plot.margin = unit(c(2, 1, 0.5, 1), unit = "cm"),
+      plot.caption = element_text(color = front_col),
+      plot.title = element_text(color = front_col),
+      plot.subtitle = element_text(color = front_col),
+      panel.background = element_rect(fill = back_col, color = NA),
+      panel.border = element_blank()
+    )
+  )
+}
+
+```
+
+
+# Mahomes vs Wilson
+
+```{r}
+passer_df <- df %>%
+  filter(str_detect(name, c('Mahomes|Russell'))) %>%
+  mutate(name = factor(name, levels = c('Patrick Mahomes', 'Russell Wilson'))) %>%
+  select(name, x_coord, y_coord)
+```
+
+```{r, fig.align='center', fig.height=7.5}
+pass_map <- passer_df %>%
+  ggplot(aes(x_coord, y_coord)) +
+  geom_density_2d_filled(
+    aes(fill = ..level.., color = ..level..),
+    contour_var = 'ndensity',
+    breaks = seq(.1,1,length.out = 10)
+  ) +
+  facet_wrap(~name)
+
+pass_map
+```
+
+
+```{r}
+back_col <- 'white'
+front_col <- 'black'
+
+pass_map +
+  add_field()
+```
+
+# Specify Color Schemes
+
+```{r}
+heat_colors <- grDevices::colorRampPalette(c("#800026FF", "#FC4E2AFF", "#FEB24CFF", "#FFFFCCFF"))(10)
+
+heat_palette <- paletteer::paletteer_d("RColorBrewer::YlOrRd", n = 9, direction = -1)
+
+heat_colors_interpolated <- colorRampPalette(paletteer::paletteer_d("RColorBrewer::YlOrRd", n = 9, direction = -1))(10)
+
+heat_colors %>% scales::show_col()
+
+heat_palette %>% scales::show_col()
+
+heat_colors_interpolated %>% scales::show_col()
+```
+
+
+```{r, fig.align='center', fig.height=7.5}
+back_col <- "black"
+front_col <- "white"
+
+pass_map +
+  add_field() +
+  scale_fill_manual(values = c(heat_colors_interpolated), aesthetics = c("fill", "color"))
+```
